@@ -48,6 +48,10 @@ def minkowski_distance(src, dst, p=2):
         dist: per-point square distance, [B, N, M]
     """
     return torch.sum(torch.abs((src[:, :, None] - dst[:, None]) ** p), dim=-1) ** (1/p)
+def generalized_distance(grouped_points, new_points, B, S, p=1):
+    diff = (grouped_points - new_points.view(B, S, 1, -1))**p
+    return diff
+
 
 def cosine_sim(src, dst):
     """

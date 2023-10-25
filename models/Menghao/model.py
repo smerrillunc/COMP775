@@ -1,11 +1,19 @@
 import torch
 import torch.nn as nn
-from pointnet_util import farthest_point_sample, index_points, square_distance, minkowski_distance, cosine_sim
+from pointnet_util import farthest_point_sample, index_points, square_distance, minkowski_distance, cosine_sim, generalized_distance
 
 
 def sample_and_group(npoint, nsample, xyz, points):
     B, N, C = xyz.shape
     S = npoint
+
+    # SHAPE REFERENCE
+    # B = Batch size (16)
+    # N = Number poitns input 1024 for first layer
+    # C = Cardinality of x, y, z = 3 always
+    # S/npoints: points to downsample to
+    # nsample: number of neighbors 32
+
 
     # SAMPLING METHOD 1: DEFAULT FPS
     fps_idx = farthest_point_sample(xyz, npoint) # [B, npoint]
@@ -52,9 +60,49 @@ def sample_and_group(npoint, nsample, xyz, points):
 
     idx = dists.argsort()[:, :, :nsample]  # B x npoint x K
 
+    # the k closest points to each of the "new downsampled points"
+    # B, S, K, C
     grouped_points = index_points(points, idx)
-    grouped_points_norm = grouped_points - new_points.view(B, S, 1, -1)
-    new_points = torch.cat([grouped_points_norm, new_points.view(B, S, 1, -1).repeat(1, 1, nsample, 1)], dim=-1)
+
+
+    #### NOTE DEPENDING ON WHAT CLASS OF METHOd WE CHOOSE WE'll HAVE TO CHANGE THE SHAPES OF THE
+    #### GATHER LOCAL LAYERS IN THE MAIN MODEL.  THIS IS BECAUSE WE ARE CONSIDERING TWO DIFFERENT CARDINALITIES
+    #### OF LOCAL FEATURE SIZE.
+
+    ##### THIS CLASS OF LOCAL FEATURE METHODS WILL NOT CHANGE THE CARDINALITY OF THE INPUT #####
+    # Method 1: raw differences what the paper uses
+    #local_feat = grouped_points - new_points.view(B, S, 1, -1)
+
+    # Method 2: absolute value of the differences
+    #local_feat = torch.abs(grouped_points - new_points.view(B, S, 1, -1))
+
+    # Method 3: a distance based approach
+    # we have many different values of p in this setting
+    #local_feat = generalized_distance(grouped_points, new_points, B, S, p=0.25)
+    #local_feat = generalized_distance(grouped_points, new_points, B, S, p=0.5)
+    #local_feat = generalized_distance(grouped_points, new_points, B, S, p=0.75)
+    #local_feat = generalized_distance(grouped_points, new_points, B, S, p=1.0)
+    #local_feat = generalized_distance(grouped_points, new_points, B, S, p=2.0)
+    #local_feat = generalized_distance(grouped_points, new_points, B, S, p=4.0)
+    #new_points = torch.cat([local_feat, new_points.view(B, S, 1, -1).repeat(1, 1, nsample, 1)], dim=-1)
+    #print(local_feat.shape)
+
+    ##### THIS CLASS OF LOCAL FEATURE METHODS WILL CHANGE THE CARDINALITY OF THE INPUT ####
+    # Method 1: Summing the differences of the features of all neighbors
+    #local_feat = torch.sum(grouped_points - new_points.view(B, S, 1, -1), keepdims=True, dim=-1)
+
+    # Method 2: Summing the absolute value of the differences of the features
+    #local_feat = torch.sum(torch.abs(grouped_points - new_points.view(B, S, 1, -1)), keepdims=True, dim=-1)
+
+    # Method 3: Cosine Similarity of feature vects
+    # a bit confusing vectorization but I tested it
+    local_feat = torch.sum((grouped_points * new_points.view(B, S, 1, -1)), keepdims=True, dim=-1) / (
+                            torch.linalg.vector_norm(grouped_points, keepdims=True,dim=-1) *
+                            torch.linalg.vector_norm(new_points.view(B, S, 1, -1), keepdims=True, dim=-1)
+                            )
+
+
+    new_points = torch.cat([local_feat, new_points.view(B, S, 1, -1).repeat(1, 1, nsample, 1)], dim=-1)
     return new_xyz, new_points
 
 
@@ -151,8 +199,17 @@ class PointTransformerCls(nn.Module):
         self.conv2 = nn.Conv1d(64, 64, kernel_size=1, bias=False)
         self.bn1 = nn.BatchNorm1d(64)
         self.bn2 = nn.BatchNorm1d(64)
-        self.gather_local_0 = Local_op(in_channels=128, out_channels=128)
-        self.gather_local_1 = Local_op(in_channels=256, out_channels=256)
+
+        # NOTE CHANGE GATHER LOCAL LAYERS CORRESPONDING TO METHOD WE'RE USING ABOVE
+        # USING SUMMARY METRICS (COSINE SIM/SUM/AVERAGING OVER THE FEATURES WE SHOULD
+        # USE THIS
+        self.gather_local_0 = Local_op(in_channels=65, out_channels=128)
+        self.gather_local_1 = Local_op(in_channels=129, out_channels=256)
+
+        # IF WE WANT DISTANCES IN EACH CARDINAL DIRECTION OF DATA USE THIS
+        #self.gather_local_0 = Local_op(in_channels=128, out_channels=128)
+        #self.gather_local_1 = Local_op(in_channels=256, out_channels=256)
+
         self.pt_last = StackedAttention()
 
         self.relu = nn.ReLU()
