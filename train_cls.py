@@ -18,6 +18,8 @@ import shutil
 import hydra
 import omegaconf
 
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
 
 def test(model, loader, num_class=40):
     mean_correct = []
@@ -26,7 +28,7 @@ def test(model, loader, num_class=40):
 
         points, target = data
         target = target[:, 0]
-        points, target = points, target
+        points, target = points.to(device), target.to(device)
         classifier = model.eval()
         pred = classifier(points)
         pred_choice = pred.data.max(1)[1]
@@ -66,7 +68,7 @@ def main(args):
     args.input_dim = 6 if args.normal else 3
     shutil.copy(hydra.utils.to_absolute_path('models/{}/model.py'.format(args.model.name)), '.')
 
-    classifier = getattr(importlib.import_module('models.{}.model'.format(args.model.name)), 'PointTransformerCls')(args)
+    classifier = getattr(importlib.import_module('models.{}.model'.format(args.model.name)), 'PointTransformerCls')(args).to(device)
 
     criterion = torch.nn.CrossEntropyLoss()
 
@@ -114,7 +116,7 @@ def main(args):
             points = torch.Tensor(points)
             target = target[:, 0]
 
-            points, target = points, target
+            points, target = points.to(device), target.to(device)
             optimizer.zero_grad()
 
             pred = classifier(points)
