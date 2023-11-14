@@ -15,10 +15,23 @@ import sys
 import provider
 import importlib
 import shutil
-import hydra
-import omegaconf
+
+import argparse
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+parser = argparse.ArgumentParser('a')
+parser.add_argument('-num-point', '--num-point', type=int, default=1024)
+parser.add_argument('-learning-rate', '--learning-rate', type=float, default=0.001)
+parser.add_argument('-weight-decay', '--weight-decay', type=float, default=0.0001)
+parser.add_argument('-batch-size', '--batch-size', type=int, default=16)
+parser.add_argument('-num-class', '--num-class', type=int, default=32)
+parser.add_argument('-epoch', '--epoch', type=int, default=100)
+parser.add_argument('-optimizer', '--optimizer', type=str, default='Adam')
+parser.add_argument('-normal', '--normal', type=bool, default=True)
+
+parser.add_argument('-model-name', '--model-name', type=str, required=True)
+parser.add_argument('-gpu', '--gpu', type=int, default=0, help='GPU device number')
 
 
 def test(model, loader, num_class=40):
@@ -44,10 +57,7 @@ def test(model, loader, num_class=40):
     return instance_acc, class_acc
 
 
-@hydra.main(config_path='config', config_name='cls')
 def main(args):
-    omegaconf.OmegaConf.set_struct(args, False)
-
     '''HYPER PARAMETER'''
     os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
     logger = logging.getLogger(__name__)
@@ -56,7 +66,7 @@ def main(args):
 
     '''DATA LOADING'''
     logger.info('Load dataset ...')
-    DATA_PATH = hydra.utils.to_absolute_path('modelnet40_normal_resampled/')
+    DATA_PATH = 'modelnet40_normal_resampled/'
 
     TRAIN_DATASET = ModelNetDataLoader(root=DATA_PATH, npoint=args.num_point, split='train', normal_channel=args.normal)
     TEST_DATASET = ModelNetDataLoader(root=DATA_PATH, npoint=args.num_point, split='test', normal_channel=args.normal)
@@ -66,9 +76,9 @@ def main(args):
     '''MODEL LOADING'''
     args.num_class = 40
     args.input_dim = 6 if args.normal else 3
-    shutil.copy(hydra.utils.to_absolute_path('models/{}/model.py'.format(args.model.name)), '.')
+    shutil.copy('models/{}/model.py'.format(args.model_name), '.')
 
-    classifier = getattr(importlib.import_module('models.{}.model'.format(args.model.name)), 'PointTransformerCls')(args).to(device)
+    classifier = getattr(importlib.import_module('models.{}.model'.format(args.model_name)), 'PointTransformerCls')(args).to(device)
 
     criterion = torch.nn.CrossEntropyLoss()
 
@@ -80,7 +90,6 @@ def main(args):
     except:
         logger.info('No existing model, starting training from scratch...')
         start_epoch = 0
-
 
     if args.optimizer == 'Adam':
         optimizer = torch.optim.Adam(
@@ -163,4 +172,5 @@ def main(args):
     logger.info('End of training...')
 
 if __name__ == '__main__':
-    main()
+    args = parser.parse_args()
+    main(args)
