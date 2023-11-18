@@ -18,17 +18,21 @@ import shutil
 
 import argparse
 
+from models.Menghao.model import MenghaoPointTransformerCls
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 parser = argparse.ArgumentParser('a')
 parser.add_argument('-num-point', '--num-point', type=int, default=1024)
-parser.add_argument('-learning-rate', '--learning-rate', type=float, default=0.001)
-parser.add_argument('-weight-decay', '--weight-decay', type=float, default=0.0001)
+parser.add_argument('-learning-rate', '--learning-rate', type=float, default=0.0001)
+parser.add_argument('-weight-decay', '--weight-decay', type=float, default=0)
 parser.add_argument('-batch-size', '--batch-size', type=int, default=16)
 parser.add_argument('-num-class', '--num-class', type=int, default=32)
 parser.add_argument('-epoch', '--epoch', type=int, default=100)
 parser.add_argument('-optimizer', '--optimizer', type=str, default='Adam')
 parser.add_argument('-normal', '--normal', type=bool, default=True)
+
+parser.add_argument('-sampling-method', '--sampling-method', type=str, default='fps', choices=['fps','random'])
 
 parser.add_argument('-model-name', '--model-name', type=str, required=True)
 parser.add_argument('-gpu', '--gpu', type=int, default=0, help='GPU device number')
@@ -78,7 +82,8 @@ def main(args):
     args.input_dim = 6 if args.normal else 3
     shutil.copy('models/{}/model.py'.format(args.model_name), '.')
 
-    classifier = getattr(importlib.import_module('models.{}.model'.format(args.model_name)), 'PointTransformerCls')(args).to(device)
+    if args.model_name == "Menghao":
+        classifier = MenghaoPointTransformerCls(args).to(device)
 
     criterion = torch.nn.CrossEntropyLoss()
 
@@ -86,9 +91,9 @@ def main(args):
         checkpoint = torch.load('best_model.pth')
         start_epoch = checkpoint['epoch']
         classifier.load_state_dict(checkpoint['model_state_dict'])
-        logger.info('Use pretrain model')
+        print('Use pretrain model')
     except:
-        logger.info('No existing model, starting training from scratch...')
+        print('No existing model, starting training from scratch...')
         start_epoch = 0
 
     if args.optimizer == 'Adam':
@@ -111,9 +116,9 @@ def main(args):
     mean_correct = []
 
     '''TRANING'''
-    logger.info('Start training...')
+    print('Start training...')
     for epoch in range(start_epoch,args.epoch):
-        logger.info('Epoch %d (%d/%s):' % (global_epoch + 1, epoch + 1, args.epoch))
+        print('Epoch %d (%d/%s):' % (global_epoch + 1, epoch + 1, args.epoch))
         
         classifier.train()
         for batch_id, data in tqdm(enumerate(trainDataLoader, 0), total=len(trainDataLoader), smoothing=0.9):
@@ -140,7 +145,7 @@ def main(args):
         scheduler.step()
 
         train_instance_acc = np.mean(mean_correct)
-        logger.info('Train Instance Accuracy: %f' % train_instance_acc)
+        print('Train Instance Accuracy: %f' % train_instance_acc)
 
 
         with torch.no_grad():
@@ -152,21 +157,21 @@ def main(args):
 
             if (class_acc >= best_class_acc):
                 best_class_acc = class_acc
-            logger.info('Test Instance Accuracy: %f, Class Accuracy: %f'% (instance_acc, class_acc))
-            logger.info('Best Instance Accuracy: %f, Class Accuracy: %f'% (best_instance_acc, best_class_acc))
+            print('Test Instance Accuracy: %f, Class Accuracy: %f'% (instance_acc, class_acc))
+            print('Best Instance Accuracy: %f, Class Accuracy: %f'% (best_instance_acc, best_class_acc))
 
-            if (instance_acc >= best_instance_acc):
-                logger.info('Save model...')
-                savepath = 'best_model.pth'
-                logger.info('Saving at %s'% savepath)
-                state = {
-                    'epoch': best_epoch,
-                    'instance_acc': instance_acc,
-                    'class_acc': class_acc,
-                    'model_state_dict': classifier.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                }
-                torch.save(state, savepath)
+            # if (instance_acc >= best_instance_acc):
+            #     print('Save model...')
+            #     savepath = 'best_model.pth'
+            #     print('Saving at %s'% savepath)
+            #     state = {
+            #         'epoch': best_epoch,
+            #         'instance_acc': instance_acc,
+            #         'class_acc': class_acc,
+            #         'model_state_dict': classifier.state_dict(),
+            #         'optimizer_state_dict': optimizer.state_dict(),
+            #     }
+            #     torch.save(state, savepath)
             global_epoch += 1
 
     logger.info('End of training...')

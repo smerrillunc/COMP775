@@ -2,8 +2,9 @@ import torch
 import torch.nn as nn
 from pointnet_util import farthest_point_sample, index_points, square_distance, minkowski_distance, cosine_sim, generalized_distance
 
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-def sample_and_group(npoint, nsample, xyz, points):
+def sample_and_group(npoint, nsample, xyz, points, sampling_method):
     B, N, C = xyz.shape
     S = npoint
 
@@ -16,11 +17,15 @@ def sample_and_group(npoint, nsample, xyz, points):
 
 
     # SAMPLING METHOD 1: DEFAULT FPS
-    fps_idx = farthest_point_sample(xyz, npoint) # [B, npoint]
+    if sampling_method == 'fps':
+        fps_idx = farthest_point_sample(xyz, npoint) # [B, npoint]
 
     # SAMPLING METHOD 2: RANDOM SAMPLING
     # NYI/TODO
-    #
+    elif sampling_method == 'random':
+        fps_idx = torch.stack([torch.randperm(xyz.size()[1]).to(device)[:npoint] for _ in range(xyz.shape[0])])
+    else:
+        raise KeyError("Invalid sampling method")
 
     new_xyz = index_points(xyz, fps_idx)
     new_points = index_points(points, fps_idx)
@@ -71,7 +76,7 @@ def sample_and_group(npoint, nsample, xyz, points):
 
     ##### THIS CLASS OF LOCAL FEATURE METHODS WILL NOT CHANGE THE CARDINALITY OF THE INPUT #####
     # Method 1: raw differences what the paper uses
-    #local_feat = grouped_points - new_points.view(B, S, 1, -1)
+    # local_feat = grouped_points - new_points.view(B, S, 1, -1)
 
     # Method 2: absolute value of the differences
     #local_feat = torch.abs(grouped_points - new_points.view(B, S, 1, -1))
@@ -89,7 +94,7 @@ def sample_and_group(npoint, nsample, xyz, points):
 
     ##### THIS CLASS OF LOCAL FEATURE METHODS WILL CHANGE THE CARDINALITY OF THE INPUT ####
     # Method 1: Summing the differences of the features of all neighbors
-    #local_feat = torch.sum(grouped_points - new_points.view(B, S, 1, -1), keepdims=True, dim=-1)
+    local_feat = torch.sum(grouped_points - new_points.view(B, S, 1, -1), keepdims=True, dim=-1)
 
     # Method 2: Summing the absolute value of the differences of the features
     #local_feat = torch.sum(torch.abs(grouped_points - new_points.view(B, S, 1, -1)), keepdims=True, dim=-1)
@@ -190,11 +195,13 @@ class StackedAttention(nn.Module):
         return x
 
 
-class PointTransformerCls(nn.Module):
+class MenghaoPointTransformerCls(nn.Module):
     def __init__(self, cfg):
         super().__init__()
         output_channels = cfg.num_class
         d_points = cfg.input_dim
+        self.sampling_method = cfg.sampling_method
+        
         self.conv1 = nn.Conv1d(d_points, 64, kernel_size=1, bias=False)
         self.conv2 = nn.Conv1d(64, 64, kernel_size=1, bias=False)
         self.bn1 = nn.BatchNorm1d(64)
@@ -232,10 +239,10 @@ class PointTransformerCls(nn.Module):
         x = self.relu(self.bn1(self.conv1(x))) # B, D, N
         x = self.relu(self.bn2(self.conv2(x))) # B, D, N
         x = x.permute(0, 2, 1)
-        new_xyz, new_feature = sample_and_group(npoint=512, nsample=32, xyz=xyz, points=x)         
+        new_xyz, new_feature = sample_and_group(npoint=512, nsample=32, xyz=xyz, points=x, sampling_method=self.sampling_method)         
         feature_0 = self.gather_local_0(new_feature)
         feature = feature_0.permute(0, 2, 1)
-        new_xyz, new_feature = sample_and_group(npoint=256, nsample=32, xyz=new_xyz, points=feature) 
+        new_xyz, new_feature = sample_and_group(npoint=256, nsample=32, xyz=new_xyz, points=feature, sampling_method=self.sampling_method) 
         feature_1 = self.gather_local_1(new_feature)
         
         x = self.pt_last(feature_1)
