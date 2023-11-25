@@ -1,10 +1,11 @@
 import torch
 import torch.nn as nn
 from pointnet_util import farthest_point_sample, index_points, square_distance, minkowski_distance, cosine_sim, generalized_distance
+from .modules import ISAB  # Import ISAB from modules.py
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-def sample_and_group(npoint, nsample, xyz, points, sampling_method):
+def sample_and_group(npoint, nsample, xyz, points, sampling_method, distance_function, local_features="diff"):
     B, N, C = xyz.shape
     S = npoint
 
@@ -32,12 +33,14 @@ def sample_and_group(npoint, nsample, xyz, points, sampling_method):
 
     ################################################################################
     # DISTANCE METRIC 1: DEFUALT SQUARED DISTANCE
-    #dists = square_distance(new_xyz, xyz)  # B x npoint x N
+    if distance_function == "square":
+        dists = square_distance(new_xyz, xyz)  # B x npoint x N
     ################################################################################
 
     ################################################################################
     # DISTANCE METRIC 2: manhattan distance
-    #dists = minkowski_distance(new_xyz, xyz, p=1)
+    if distance_function == "mink_1":
+        dists = minkowski_distance(new_xyz, xyz, p=1)
     ################################################################################
 
     ################################################################################
@@ -47,12 +50,14 @@ def sample_and_group(npoint, nsample, xyz, points, sampling_method):
 
     ################################################################################
     # DISTANCE METRIC 4: p = 3
-    #dists = minkowski_distance(new_xyz, xyz, p=3)
+    if distance_function == "mink_3":
+        dists = minkowski_distance(new_xyz, xyz, p=3)
     ################################################################################
 
     ################################################################################
     # DISTANCE METRIC 5: cosine similarity just on xyz
-    #dists = cosine_sim(new_xyz, xyz)
+    if distance_function == "cos_sim_1":
+        dists = cosine_sim(new_xyz, xyz)
     ################################################################################
 
     ################################################################################
@@ -76,7 +81,8 @@ def sample_and_group(npoint, nsample, xyz, points, sampling_method):
 
     ##### THIS CLASS OF LOCAL FEATURE METHODS WILL NOT CHANGE THE CARDINALITY OF THE INPUT #####
     # Method 1: raw differences what the paper uses
-    # local_feat = grouped_points - new_points.view(B, S, 1, -1)
+    if local_features == "diff":
+        local_feat = grouped_points - new_points.view(B, S, 1, -1)
 
     # Method 2: absolute value of the differences
     #local_feat = torch.abs(grouped_points - new_points.view(B, S, 1, -1))
@@ -94,17 +100,19 @@ def sample_and_group(npoint, nsample, xyz, points, sampling_method):
 
     ##### THIS CLASS OF LOCAL FEATURE METHODS WILL CHANGE THE CARDINALITY OF THE INPUT ####
     # Method 1: Summing the differences of the features of all neighbors
-    local_feat = torch.sum(grouped_points - new_points.view(B, S, 1, -1), keepdims=True, dim=-1)
+    if local_features == "diff_2":
+        local_feat = torch.sum(grouped_points - new_points.view(B, S, 1, -1), keepdims=True, dim=-1)
 
     # Method 2: Summing the absolute value of the differences of the features
     #local_feat = torch.sum(torch.abs(grouped_points - new_points.view(B, S, 1, -1)), keepdims=True, dim=-1)
 
     # Method 3: Cosine Similarity of feature vects
     # a bit confusing vectorization but I tested it
-    local_feat = torch.sum((grouped_points * new_points.view(B, S, 1, -1)), keepdims=True, dim=-1) / (
-                            torch.linalg.vector_norm(grouped_points, keepdims=True,dim=-1) *
-                            torch.linalg.vector_norm(new_points.view(B, S, 1, -1), keepdims=True, dim=-1)
-                            )
+    if local_features == "cos_sim":
+        local_feat = torch.sum((grouped_points * new_points.view(B, S, 1, -1)), keepdims=True, dim=-1) / (
+                                torch.linalg.vector_norm(grouped_points, keepdims=True,dim=-1) *
+                                torch.linalg.vector_norm(new_points.view(B, S, 1, -1), keepdims=True, dim=-1)
+                                )
 
 
     new_points = torch.cat([local_feat, new_points.view(B, S, 1, -1).repeat(1, 1, nsample, 1)], dim=-1)
@@ -200,7 +208,11 @@ class MenghaoPointTransformerCls(nn.Module):
         super().__init__()
         output_channels = cfg.num_class
         d_points = cfg.input_dim
+        self.n_points_attn = cfg.num_points_attn
+        
         self.sampling_method = cfg.sampling_method
+        
+        self.distance_function = cfg.distance_function
         
         self.conv1 = nn.Conv1d(d_points, 64, kernel_size=1, bias=False)
         self.conv2 = nn.Conv1d(64, 64, kernel_size=1, bias=False)
@@ -210,12 +222,13 @@ class MenghaoPointTransformerCls(nn.Module):
         # NOTE CHANGE GATHER LOCAL LAYERS CORRESPONDING TO METHOD WE'RE USING ABOVE
         # USING SUMMARY METRICS (COSINE SIM/SUM/AVERAGING OVER THE FEATURES WE SHOULD
         # USE THIS
-        self.gather_local_0 = Local_op(in_channels=65, out_channels=128)
-        self.gather_local_1 = Local_op(in_channels=129, out_channels=256)
+        # TODO add if statement
+        # self.gather_local_0 = Local_op(in_channels=65, out_channels=128)
+        # self.gather_local_1 = Local_op(in_channels=129, out_channels=256)
 
         # IF WE WANT DISTANCES IN EACH CARDINAL DIRECTION OF DATA USE THIS
-        #self.gather_local_0 = Local_op(in_channels=128, out_channels=128)
-        #self.gather_local_1 = Local_op(in_channels=256, out_channels=256)
+        self.gather_local_0 = Local_op(in_channels=128, out_channels=128)
+        self.gather_local_1 = Local_op(in_channels=256, out_channels=256)
 
         self.pt_last = StackedAttention()
 
@@ -232,21 +245,55 @@ class MenghaoPointTransformerCls(nn.Module):
         self.dp2 = nn.Dropout(p=0.5)
         self.linear3 = nn.Linear(256, output_channels)
 
-    def forward(self, x):
+        print("isab:", cfg.use_isab)
+
+        if cfg.use_isab > 0:
+            # ISAB layer
+            dim_in = self.n_points_attn  # Adjust according to your model's output
+            dim_out = self.n_points_attn  # Adjust according to your model's output
+            num_heads = 4  # Number of heads in multi-head attention
+            num_inds = 32  # Number of inducing points in ISAB
+
+            if cfg.use_isab == 1:
+                self.isab = ISAB(dim_in, dim_out, num_heads, num_inds)
+            if cfg.use_isab == 3:
+                self.isab = ISAB(dim_in, dim_out, 1, num_inds)
+            if cfg.use_isab == 2:
+                print("test")
+
+                self.isab = nn.Sequential(
+                    ISAB(dim_in, dim_out, 1, num_inds),
+                    ISAB(dim_in, dim_out, 1, num_inds),
+                )
+
+                
+            self.conv_fuse = nn.Sequential(nn.Conv1d(512, 512, kernel_size=1, bias=False),
+                            nn.BatchNorm1d(512),
+                            nn.LeakyReLU(negative_slope=0.2))
+            self.linear1 = nn.Linear(512, 512, bias=False)
+        else:
+            self.isab = None
+
+    def forward(self, x: torch.Tensor):
         xyz = x[..., :3]
         x = x.permute(0, 2, 1)
         batch_size, _, _ = x.size()
         x = self.relu(self.bn1(self.conv1(x))) # B, D, N
         x = self.relu(self.bn2(self.conv2(x))) # B, D, N
         x = x.permute(0, 2, 1)
-        new_xyz, new_feature = sample_and_group(npoint=512, nsample=32, xyz=xyz, points=x, sampling_method=self.sampling_method)         
+        new_xyz, new_feature = sample_and_group(npoint=self.n_points_attn * 2, nsample=32, xyz=xyz, points=x, sampling_method=self.sampling_method, distance_function=self.distance_function)
         feature_0 = self.gather_local_0(new_feature)
         feature = feature_0.permute(0, 2, 1)
-        new_xyz, new_feature = sample_and_group(npoint=256, nsample=32, xyz=new_xyz, points=feature, sampling_method=self.sampling_method) 
+        new_xyz, new_feature = sample_and_group(npoint=self.n_points_attn, nsample=32, xyz=new_xyz, points=feature, sampling_method=self.sampling_method, distance_function=self.distance_function)
         feature_1 = self.gather_local_1(new_feature)
         
-        x = self.pt_last(feature_1)
+        if self.isab is not None:
+            # print(feature_1.shape)
+            x = self.isab(feature_1)
+        else:
+            x = self.pt_last(feature_1)
         x = torch.cat([x, feature_1], dim=1)
+
         x = self.conv_fuse(x)
         x = torch.max(x, 2)[0]
         x = x.view(batch_size, -1)

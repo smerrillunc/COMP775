@@ -2,7 +2,7 @@
 Author: Benny
 Date: Nov 2019
 """
-from dataset import ModelNetDataLoader
+from dataset import ModelNetDataLoader, ScanObjectNN
 import argparse
 import numpy as np
 import os
@@ -15,10 +15,14 @@ import sys
 import provider
 import importlib
 import shutil
+from torch.utils.tensorboard import SummaryWriter
+
 
 import argparse
 
 from models.Menghao.model import MenghaoPointTransformerCls
+
+import tensorboard
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -28,14 +32,22 @@ parser.add_argument('-learning-rate', '--learning-rate', type=float, default=0.0
 parser.add_argument('-weight-decay', '--weight-decay', type=float, default=0)
 parser.add_argument('-batch-size', '--batch-size', type=int, default=16)
 parser.add_argument('-num-class', '--num-class', type=int, default=32)
-parser.add_argument('-epoch', '--epoch', type=int, default=100)
+parser.add_argument('-epoch', '--epoch', type=int, default=80)
 parser.add_argument('-optimizer', '--optimizer', type=str, default='Adam')
 parser.add_argument('-normal', '--normal', type=bool, default=True)
+
+parser.add_argument('--num-points-attn', '--num-points-attn', type=int, default=256)
+parser.add_argument('--use-isab', '--use-isab', type=int, default=0)
+parser.add_argument('-distance-function', '--distance-function', type=str, default="square")
+
+parser.add_argument('-dataset', '--dataset', type=str, default="modelnet")
 
 parser.add_argument('-sampling-method', '--sampling-method', type=str, default='fps', choices=['fps','random'])
 
 parser.add_argument('-model-name', '--model-name', type=str, required=True)
 parser.add_argument('-gpu', '--gpu', type=int, default=0, help='GPU device number')
+
+parser.add_argument('-exp-name', '--exp-name', type=str, required=True)
 
 
 def test(model, loader, num_class=40):
@@ -65,6 +77,9 @@ def main(args):
     '''HYPER PARAMETER'''
     os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
     logger = logging.getLogger(__name__)
+    
+    exp_name = args.dataset + "_" + args.model_name + "_" + args.exp_name
+    os.makedirs(f"log/cls/{exp_name}", exist_ok=True)
 
     #print(args.pretty())
 
@@ -72,15 +87,33 @@ def main(args):
     logger.info('Load dataset ...')
     DATA_PATH = 'modelnet40_normal_resampled/'
 
-    TRAIN_DATASET = ModelNetDataLoader(root=DATA_PATH, npoint=args.num_point, split='train', normal_channel=args.normal)
-    TEST_DATASET = ModelNetDataLoader(root=DATA_PATH, npoint=args.num_point, split='test', normal_channel=args.normal)
+    if args.dataset == "modelnet":
+        TRAIN_DATASET = ModelNetDataLoader(root=DATA_PATH, npoint=args.num_point, split='train', normal_channel=args.normal)
+        TEST_DATASET = ModelNetDataLoader(root=DATA_PATH, npoint=args.num_point, split='test', normal_channel=args.normal)
+    elif args.dataset == "scanobjectnn":
+        TRAIN_DATASET = ScanObjectNN("train", "h5_files/main_split_nobg")
+        TEST_DATASET = ScanObjectNN("test", "h5_files/main_split_nobg")
+    # TEST_DATASET = ModelNetDataLoader(root=DATA_PATH, npoint=args.num_point, split='test', normal_channel=args.normal)
+    # train_dataset, val_dataset = torch.utils.data.random_split(TRAIN_DATASET, [0.9, 0.1], generator=torch.Generator().manual_seed(42))
+
     trainDataLoader = torch.utils.data.DataLoader(TRAIN_DATASET, batch_size=args.batch_size, shuffle=True, num_workers=4)
     testDataLoader = torch.utils.data.DataLoader(TEST_DATASET, batch_size=args.batch_size, shuffle=False, num_workers=4)
+    
+    writer = SummaryWriter(f"log/cls/{exp_name}")
+    
+
 
     '''MODEL LOADING'''
-    args.num_class = 40
+    if args.dataset == "scanobjectnn":
+        args.num_class = 15
+        args.normal = False
+    elif args.dataset == "modelnet":
+        args.num_class = 40
+
     args.input_dim = 6 if args.normal else 3
-    shutil.copy('models/{}/model.py'.format(args.model_name), '.')
+    # shutil.copy('models/{}/model.py'.format(args.model_name), '.')
+    import sys
+    print(sys.argv[1:])
 
     if args.model_name == "Menghao":
         classifier = MenghaoPointTransformerCls(args).to(device)
@@ -88,7 +121,7 @@ def main(args):
     criterion = torch.nn.CrossEntropyLoss()
 
     try:
-        checkpoint = torch.load('best_model.pth')
+        checkpoint = torch.load(f'log/cls/{exp_name}/best_model.pth')
         start_epoch = checkpoint['epoch']
         classifier.load_state_dict(checkpoint['model_state_dict'])
         print('Use pretrain model')
@@ -120,8 +153,12 @@ def main(args):
     for epoch in range(start_epoch,args.epoch):
         print('Epoch %d (%d/%s):' % (global_epoch + 1, epoch + 1, args.epoch))
         
+        import time
+        
+        start = time.time()
+        
         classifier.train()
-        for batch_id, data in tqdm(enumerate(trainDataLoader, 0), total=len(trainDataLoader), smoothing=0.9):
+        for batch_id, data in enumerate(trainDataLoader, 0):
             points, target = data
             points = points.data.numpy()
             points = provider.random_point_dropout(points)
@@ -129,6 +166,7 @@ def main(args):
             points[:,:, 0:3] = provider.shift_point_cloud(points[:,:, 0:3])
             points = torch.Tensor(points)
             target = target[:, 0]
+            print(target)
 
             points, target = points.to(device), target.to(device)
             optimizer.zero_grad()
@@ -143,13 +181,24 @@ def main(args):
             global_step += 1
             
         scheduler.step()
+        
+        end = time.time()
 
         train_instance_acc = np.mean(mean_correct)
         print('Train Instance Accuracy: %f' % train_instance_acc)
-
+        
+        # record run time.
+        with open(f"log/cls/{exp_name}/times.txt", "a") as f:
+            f.write(f"{epoch},{end - start}\n")
+        
+        writer.add_scalar("train_acc", train_instance_acc, epoch)
 
         with torch.no_grad():
             instance_acc, class_acc = test(classifier.eval(), testDataLoader)
+            
+            writer.add_scalar("val_acc", instance_acc, epoch)
+            writer.flush()
+
 
             if (instance_acc >= best_instance_acc):
                 best_instance_acc = instance_acc
@@ -159,19 +208,22 @@ def main(args):
                 best_class_acc = class_acc
             print('Test Instance Accuracy: %f, Class Accuracy: %f'% (instance_acc, class_acc))
             print('Best Instance Accuracy: %f, Class Accuracy: %f'% (best_instance_acc, best_class_acc))
+            
+            with open(f"log/cls/{exp_name}/val_acc.txt", "w") as f:
+                f.write('Test Instance Accuracy: %f, Class Accuracy: %f'% (instance_acc, class_acc))
 
-            # if (instance_acc >= best_instance_acc):
-            #     print('Save model...')
-            #     savepath = 'best_model.pth'
-            #     print('Saving at %s'% savepath)
-            #     state = {
-            #         'epoch': best_epoch,
-            #         'instance_acc': instance_acc,
-            #         'class_acc': class_acc,
-            #         'model_state_dict': classifier.state_dict(),
-            #         'optimizer_state_dict': optimizer.state_dict(),
-            #     }
-            #     torch.save(state, savepath)
+            if (instance_acc >= best_instance_acc):
+                print('Save model...')
+                savepath = f'log/cls/{exp_name}/best_model.pth'
+                print('Saving at %s'% savepath)
+                state = {
+                    'epoch': best_epoch,
+                    'instance_acc': instance_acc,
+                    'class_acc': class_acc,
+                    'model_state_dict': classifier.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                }
+                torch.save(state, savepath)
             global_epoch += 1
 
     logger.info('End of training...')
