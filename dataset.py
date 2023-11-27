@@ -196,7 +196,7 @@ class ScanObjectNN(Dataset):
             h5 = h5py.File(os.path.join(self.root, 'test_objectdataset_augmentedrot_scale75.h5'), 'r')
 
             self.points = np.array(h5['data']).astype(np.float32)
-            print(self.points.shape)
+            # print(self.points.shape)
 
             self.labels = np.array(h5['label']).astype(int)
             h5.close()

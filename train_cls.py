@@ -42,12 +42,22 @@ parser.add_argument('-distance-function', '--distance-function', type=str, defau
 
 parser.add_argument('-dataset', '--dataset', type=str, default="modelnet")
 
-parser.add_argument('-sampling-method', '--sampling-method', type=str, default='fps', choices=['fps','random'])
+parser.add_argument('-sampling-method', '--sampling-method', type=str, default='fps', choices=['fps','random', 'voxel'])
+parser.add_argument('-downsample-layer-count', '--downsample-layer-count', type=int, default=2)
+parser.add_argument('-voxel-grid-config', '--voxel-grid-config', type=int, default=0)
+
 
 parser.add_argument('-model-name', '--model-name', type=str, required=True)
 parser.add_argument('-gpu', '--gpu', type=int, default=0, help='GPU device number')
 
 parser.add_argument('-exp-name', '--exp-name', type=str, required=True)
+
+class ParserArgs:
+    sampling_method: str
+    downsample_layer_count: int
+    use_isab: int
+    num_points_attn: int
+    voxel_grid_config: int
 
 
 def test(model, loader, num_class=40):
@@ -73,7 +83,7 @@ def test(model, loader, num_class=40):
     return instance_acc, class_acc
 
 
-def main(args):
+def main(args: ParserArgs):
     '''HYPER PARAMETER'''
     os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
     logger = logging.getLogger(__name__)
@@ -89,15 +99,15 @@ def main(args):
 
     if args.dataset == "modelnet":
         TRAIN_DATASET = ModelNetDataLoader(root=DATA_PATH, npoint=args.num_point, split='train', normal_channel=args.normal)
-        TEST_DATASET = ModelNetDataLoader(root=DATA_PATH, npoint=args.num_point, split='test', normal_channel=args.normal)
+        # TEST_DATASET = ModelNetDataLoader(root=DATA_PATH, npoint=args.num_point, split='test', normal_channel=args.normal)
     elif args.dataset == "scanobjectnn":
         TRAIN_DATASET = ScanObjectNN("train", "h5_files/main_split_nobg")
-        TEST_DATASET = ScanObjectNN("test", "h5_files/main_split_nobg")
+        # TEST_DATASET = ScanObjectNN("test", "h5_files/main_split_nobg")
     # TEST_DATASET = ModelNetDataLoader(root=DATA_PATH, npoint=args.num_point, split='test', normal_channel=args.normal)
-    # train_dataset, val_dataset = torch.utils.data.random_split(TRAIN_DATASET, [0.9, 0.1], generator=torch.Generator().manual_seed(42))
+    train_dataset, val_dataset = torch.utils.data.random_split(TRAIN_DATASET, [0.9, 0.1], generator=torch.Generator().manual_seed(42))
 
-    trainDataLoader = torch.utils.data.DataLoader(TRAIN_DATASET, batch_size=args.batch_size, shuffle=True, num_workers=4)
-    testDataLoader = torch.utils.data.DataLoader(TEST_DATASET, batch_size=args.batch_size, shuffle=False, num_workers=4)
+    trainDataLoader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4)
+    testDataLoader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4)
     
     writer = SummaryWriter(f"log/cls/{exp_name}")
     
@@ -166,7 +176,6 @@ def main(args):
             points[:,:, 0:3] = provider.shift_point_cloud(points[:,:, 0:3])
             points = torch.Tensor(points)
             target = target[:, 0]
-            print(target)
 
             points, target = points.to(device), target.to(device)
             optimizer.zero_grad()
@@ -194,7 +203,7 @@ def main(args):
         writer.add_scalar("train_acc", train_instance_acc, epoch)
 
         with torch.no_grad():
-            instance_acc, class_acc = test(classifier.eval(), testDataLoader)
+            instance_acc, class_acc = test(classifier.eval(), testDataLoader, num_class=args.num_class)
             
             writer.add_scalar("val_acc", instance_acc, epoch)
             writer.flush()
@@ -227,6 +236,10 @@ def main(args):
             global_epoch += 1
 
     logger.info('End of training...')
+    
+    # Log test set.
+    import test_cls
+    test_cls.main(args)
 
 if __name__ == '__main__':
     args = parser.parse_args()
