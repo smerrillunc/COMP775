@@ -39,6 +39,7 @@ parser.add_argument('-normal', '--normal', type=bool, default=True)
 parser.add_argument('--num-points-attn', '--num-points-attn', type=int, default=256)
 parser.add_argument('--use-isab', '--use-isab', type=int, default=0)
 parser.add_argument('-distance-function', '--distance-function', type=str, default="square")
+parser.add_argument('-local-features', '--local-features', type=str, default="diff")
 
 parser.add_argument('-dataset', '--dataset', type=str, default="modelnet")
 

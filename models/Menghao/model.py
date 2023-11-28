@@ -184,7 +184,8 @@ def sample_and_group(npoint: torch.Tensor, nsample: int, xyz: torch.Tensor, poin
     #local_feat = generalized_distance(grouped_points, new_points, B, S, p=0.25)
     #local_feat = generalized_distance(grouped_points, new_points, B, S, p=0.5)
     #local_feat = generalized_distance(grouped_points, new_points, B, S, p=0.75)
-    #local_feat = generalized_distance(grouped_points, new_points, B, S, p=1.0)
+    if local_features == "dist_p_1":
+        local_feat = generalized_distance(grouped_points, new_points, B, S, p=1.0)
     #local_feat = generalized_distance(grouped_points, new_points, B, S, p=2.0)
     #local_feat = generalized_distance(grouped_points, new_points, B, S, p=4.0)
     #new_points = torch.cat([local_feat, new_points.view(B, S, 1, -1).repeat(1, 1, nsample, 1)], dim=-1)
@@ -288,6 +289,20 @@ class StackedAttention(nn.Module):
 
                 self.isab1 = ISAB(dim_in, dim_out, 1, num_inds)
                 self.isab2 = ISAB(dim_in, dim_out, 1, num_inds)
+                        
+            if cfg.use_isab == 4:
+                self.isab = ISAB(dim_in, dim_out, num_heads, num_inds, False, True)
+            if cfg.use_isab == 5:
+                # print("test")
+
+                self.isab1 = ISAB(dim_in, dim_out, 1, num_inds,  False, True)
+                self.isab2 = ISAB(dim_in, dim_out, 1, num_inds,  False, True)
+            
+            if cfg.use_isab == 6:
+                self.isab1 = ISAB(dim_in, dim_out, 1, num_inds,  False, True)
+                self.isab2 = ISAB(dim_in, dim_out, 1, num_inds,  False, True)
+                self.isab3 = ISAB(dim_in, dim_out, 1, num_inds,  False, True)
+                self.isab4 = ISAB(dim_in, dim_out, 1, num_inds,  False, True)
 
         else:
             self.sa1 = SA_Layer(channels)
@@ -308,14 +323,14 @@ class StackedAttention(nn.Module):
         batch_size, _, N = x.size()
 
 
-        if self.use_isab == 1:
+        if self.use_isab in [1,4]:
             return self.isab(x)
-        elif self.use_isab == 2:
+        elif self.use_isab in [2,5]:
             x1 = self.isab1(x)
             x2 = self.isab2(x1)
 
             x = torch.cat((x1, x2), dim=1)
-        elif self.use_isab == 3:
+        elif self.use_isab in [3,6]:
             x1 = self.isab1(x)
             x2 = self.isab2(x1)
             x3 = self.isab2(x2)
@@ -347,7 +362,8 @@ class MenghaoPointTransformerCls(nn.Module):
         
         self.distance_function = cfg.distance_function
         self.downsample_layer_count = cfg.downsample_layer_count
-
+        
+        self.local_features = cfg.local_features
         
         self.conv1 = nn.Conv1d(d_points, 64, kernel_size=1, bias=False)
         self.conv2 = nn.Conv1d(64, 64, kernel_size=1, bias=False)
@@ -359,15 +375,17 @@ class MenghaoPointTransformerCls(nn.Module):
         # USING SUMMARY METRICS (COSINE SIM/SUM/AVERAGING OVER THE FEATURES WE SHOULD
         # USE THIS
         # TODO add if statement
-        # self.gather_local_0 = Local_op(in_channels=65, out_channels=128)
-        # self.gather_local_1 = Local_op(in_channels=129, out_channels=256)
+        if self.local_features in ["diff_2", "cos_sim"]:
+            self.gather_local_0 = Local_op(in_channels=65, out_channels=128)
+            self.gather_local_1 = Local_op(in_channels=129, out_channels=256)
 
-        # IF WE WANT DISTANCES IN EACH CARDINAL DIRECTION OF DATA USE THIS
-        if self.downsample_layer_count == 2:
-            self.gather_local_0 = Local_op(in_channels=128, out_channels=128)
-            self.gather_local_1 = Local_op(in_channels=256, out_channels=256)
-        elif self.downsample_layer_count == 1:
-            self.gather_local_1 = Local_op(in_channels=128, out_channels=256)
+        else:
+            # IF WE WANT DISTANCES IN EACH CARDINAL DIRECTION OF DATA USE THIS
+            if self.downsample_layer_count == 2:
+                self.gather_local_0 = Local_op(in_channels=128, out_channels=128)
+                self.gather_local_1 = Local_op(in_channels=256, out_channels=256)
+            elif self.downsample_layer_count == 1:
+                self.gather_local_1 = Local_op(in_channels=128, out_channels=256)
         self.pt_last = StackedAttention(channels=256, cfg=cfg)
 
         self.relu = nn.ReLU()
@@ -387,16 +405,21 @@ class MenghaoPointTransformerCls(nn.Module):
 
         if cfg.use_isab > 0:
             # modify layer counts.
-            if cfg.use_isab in [1,3]:
+            if cfg.use_isab in [1,4]:
                 self.conv_fuse = nn.Sequential(nn.Conv1d(512, 512, kernel_size=1, bias=False),
                                 nn.BatchNorm1d(512),
                                 nn.LeakyReLU(negative_slope=0.2))
                 self.linear1 = nn.Linear(512, 512, bias=False)
-            if cfg.use_isab == 2:
+            if cfg.use_isab in [2,5]:
                 self.conv_fuse = nn.Sequential(nn.Conv1d(768, 512, kernel_size=1, bias=False),
                                 nn.BatchNorm1d(512),
                                 nn.LeakyReLU(negative_slope=0.2))
                 self.linear1 = nn.Linear(512, 512, bias=False)
+            if cfg.use_isab in [3,6]:
+                self.conv_fuse = nn.Sequential(nn.Conv1d(1280, 1024, kernel_size=1, bias=False),
+                                nn.BatchNorm1d(1024),
+                                nn.LeakyReLU(negative_slope=0.2))
+                self.linear1 = nn.Linear(1024, 512, bias=False)
 
     def forward(self, x: torch.Tensor):
         xyz = x[..., :3]
@@ -408,18 +431,19 @@ class MenghaoPointTransformerCls(nn.Module):
         
         if self.downsample_layer_count == 2:
             import math
+            # This is not used if the voxel method is not used
             voxel_width_1 = int(math.floor((2*self.n_points_attn) ** (1/3)))
-            new_xyz, new_feature = sample_and_group(npoint=self.n_points_attn * 2, nsample=32, xyz=xyz, points=x, sampling_method=self.sampling_method, distance_function=self.distance_function, local_features="diff", voxel_width=voxel_width_1)
+            new_xyz, new_feature = sample_and_group(npoint=self.n_points_attn * 2, nsample=32, xyz=xyz, points=x, sampling_method=self.sampling_method, distance_function=self.distance_function, local_features=self.local_features, voxel_width=voxel_width_1)
             feature_0 = self.gather_local_0(new_feature)
             feature = feature_0.permute(0, 2, 1)
             
             voxel_width_2 = int(math.floor((self.n_points_attn) ** (1/3)))
-            new_xyz, new_feature = sample_and_group(npoint=self.n_points_attn, nsample=32, xyz=new_xyz, points=feature, sampling_method=self.sampling_method, distance_function=self.distance_function, local_features="diff", voxel_width=voxel_width_2)
+            new_xyz, new_feature = sample_and_group(npoint=self.n_points_attn, nsample=32, xyz=new_xyz, points=feature, sampling_method=self.sampling_method, distance_function=self.distance_function, local_features=self.local_features, voxel_width=voxel_width_2)
             feature_1 = self.gather_local_1(new_feature)
         elif self.downsample_layer_count == 1:
             import math
             voxel_width = int(math.floor(self.n_points_attn ** (1/3)))
-            new_xyz, new_feature = sample_and_group(npoint=self.n_points_attn, nsample=32, xyz=xyz, points=x, sampling_method=self.sampling_method, distance_function=self.distance_function, local_features="diff", voxel_width=voxel_width)
+            new_xyz, new_feature = sample_and_group(npoint=self.n_points_attn, nsample=32, xyz=xyz, points=x, sampling_method=self.sampling_method, distance_function=self.distance_function, local_features=self.local_features, voxel_width=voxel_width)
             feature_1 = self.gather_local_1(new_feature)
         else:
             raise KeyError()
