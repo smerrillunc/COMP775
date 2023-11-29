@@ -182,11 +182,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(BASE_DIR)
 
 class ScanObjectNN(Dataset):
-    def __init__(self, subset: str, root: str):
+    def __init__(self, subset: str, root: str, npoints = 1024):
         super().__init__()
         self.subset = subset
         self.root = root
-        
+        self.npoints = npoints
         if self.subset == 'train':
             h5 = h5py.File(os.path.join(self.root, 'training_objectdataset_augmentedrot_scale75.h5'), 'r')
             self.points = np.array(h5['data']).astype(np.float32)
@@ -212,7 +212,7 @@ class ScanObjectNN(Dataset):
         current_points = torch.from_numpy(current_points).float()
         label = self.labels[idx]
         
-        return current_points, torch.tensor([label])
+        return current_points[0:self.npoints,:], torch.tensor([label])
 
     def __len__(self):
         return self.points.shape[0]

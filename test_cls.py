@@ -24,18 +24,19 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 parser = argparse.ArgumentParser('a')
 parser = argparse.ArgumentParser('a')
-parser.add_argument('-num-point', '--num-point', type=int, default=1024)
+parser.add_argument('--num-points', type=int, default=1024)
 parser.add_argument('-learning-rate', '--learning-rate', type=float, default=0.0001)
 parser.add_argument('-weight-decay', '--weight-decay', type=float, default=0)
 parser.add_argument('-batch-size', '--batch-size', type=int, default=16)
 parser.add_argument('-num-class', '--num-class', type=int, default=32)
-parser.add_argument('-epoch', '--epoch', type=int, default=100)
+parser.add_argument('-epoch', '--epoch', type=int, default=80)
 parser.add_argument('-optimizer', '--optimizer', type=str, default='Adam')
 parser.add_argument('-normal', '--normal', type=bool, default=True)
 
-parser.add_argument('--num-points-attn', '--num-points-attn', type=int, default=256)
-parser.add_argument('--use-isab', '--use-isab', type=int, default=0)
+parser.add_argument('--num-points-attn', type=int, default=256)
+parser.add_argument('-use-isab', '--use-isab', type=int, default=0)
 parser.add_argument('-distance-function', '--distance-function', type=str, default="square")
+parser.add_argument('-local-features', '--local-features', type=str, default="diff")
 
 parser.add_argument('-dataset', '--dataset', type=str, default="modelnet")
 
@@ -44,11 +45,10 @@ parser.add_argument('-downsample-layer-count', '--downsample-layer-count', type=
 parser.add_argument('-voxel-grid-config', '--voxel-grid-config', type=int, default=0)
 
 
-parser.add_argument('-model-name', '--model-name', type=str, required=True)
+parser.add_argument('-model-name', '--model-name', type=str, default="Menghao")
 parser.add_argument('-gpu', '--gpu', type=int, default=0, help='GPU device number')
 
 parser.add_argument('-exp-name', '--exp-name', type=str, required=True)
-
 
 def test(model, loader, num_class=40):
     mean_correct = []
@@ -90,10 +90,10 @@ def main(args):
 
     if args.dataset == "modelnet":
         # TRAIN_DATASET = ModelNetDataLoader(root=DATA_PATH, npoint=args.num_point, split='train', normal_channel=args.normal)
-        TEST_DATASET = ModelNetDataLoader(root=DATA_PATH, npoint=args.num_point, split='test', normal_channel=args.normal)
+        TEST_DATASET = ModelNetDataLoader(root=DATA_PATH, npoint=args.num_points, split='test', normal_channel=args.normal)
     elif args.dataset == "scanobjectnn":
         # TRAIN_DATASET = ScanObjectNN("train", "h5_files/main_split_nobg")
-        TEST_DATASET = ScanObjectNN("test", "h5_files/main_split_nobg")
+        TEST_DATASET = ScanObjectNN("test", "h5_files/main_split_nobg", args.num_points)
 
     testDataLoader = torch.utils.data.DataLoader(TEST_DATASET, batch_size=args.batch_size, shuffle=False, num_workers=4)
 
