@@ -220,8 +220,8 @@ def main(args: ParserArgs):
             print('Test Instance Accuracy: %f, Class Accuracy: %f'% (instance_acc, class_acc))
             print('Best Instance Accuracy: %f, Class Accuracy: %f'% (best_instance_acc, best_class_acc))
             
-            with open(f"log/cls/{exp_name}/val_acc.txt", "w") as f:
-                f.write('Test Instance Accuracy: %f, Class Accuracy: %f'% (instance_acc, class_acc))
+            with open(f"log/cls/{exp_name}/val_acc.txt", "a") as f:
+                f.write('Test Instance Accuracy: %f, Class Accuracy: %f\n'% (instance_acc, class_acc))
 
             if (instance_acc >= best_instance_acc):
                 print('Save model...')

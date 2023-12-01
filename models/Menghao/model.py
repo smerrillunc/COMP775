@@ -207,7 +207,6 @@ def sample_and_group(npoint: torch.Tensor, nsample: int, xyz: torch.Tensor, poin
                                 torch.linalg.vector_norm(new_points.view(B, S, 1, -1), keepdims=True, dim=-1)
                                 )
 
-    print(local_feat.shape)
     new_points = torch.cat([local_feat, new_points.view(B, S, 1, -1).repeat(1, 1, nsample, 1)], dim=-1)
     return new_xyz, new_points
 
