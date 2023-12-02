@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 # from train_cls import ParserArgs
-from pointnet_util import farthest_point_sample, index_points, square_distance, minkowski_distance, cosine_sim, generalized_distance
+from pointnet_util import farthest_point_sample, index_points, square_distance, minkowski_distance, cosine_sim, generalized_distance, query_ball_point
 from .modules import ISAB  # Import ISAB from modules.py
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -92,7 +92,7 @@ def voxelize(npoint, nsample, xyz, points, W) -> torch.Tensor:
     
     return fps_idx
 
-def sample_and_group(npoint: torch.Tensor, nsample: int, xyz: torch.Tensor, points: torch.Tensor, sampling_method: str, distance_function, local_features="diff", voxel_width=8):
+def sample_and_group(npoint: torch.Tensor, nsample: int, xyz: torch.Tensor, points: torch.Tensor, sampling_method: str, distance_function, local_features="diff", voxel_width=8, radii=[0.1]):
     B, N, C = xyz.shape
     S = npoint
 
@@ -121,6 +121,31 @@ def sample_and_group(npoint: torch.Tensor, nsample: int, xyz: torch.Tensor, poin
 
     new_xyz = index_points(xyz, fps_idx)
     new_points = index_points(points, fps_idx)
+
+
+    #### Ball query with MSG
+    if distance_function =='bq':
+        print("Ball Query Start")
+        # relative scale to use for radii
+        dists = square_distance(new_xyz, xyz)
+        scale = float(torch.max(dists) - torch.min(dists))
+        # check different radii
+        # radii = [0.1]
+        # initialize empty tensor
+        grouped_points = index_points(points, query_ball_point(radii[0]*scale, nsample, xyz, new_xyz))
+        local_feat = grouped_points - new_points.view(B, S, 1, -1)
+
+        for i in range(1, len(radii)):
+            grouped_points = index_points(points, query_ball_point(radii[i]*scale, nsample, xyz, new_xyz))
+            tmp = grouped_points - new_points.view(B, S, 1, -1)
+            local_feat = torch.cat((tmp, local_feat), dim=-1)
+
+        new_points = torch.cat([local_feat, new_points.view(B, S, 1, -1).repeat(1, 1, nsample, 1)], dim=-1)
+        return new_xyz, new_points
+    ####
+
+
+
 
     ################################################################################
     # DISTANCE METRIC 1: DEFUALT SQUARED DISTANCE
@@ -354,6 +379,7 @@ class MenghaoPointTransformerCls(nn.Module):
     def __init__(self, cfg):
         # print(cfg.num_points_attn)
         super().__init__()
+
         output_channels = cfg.num_class
         d_points = cfg.input_dim
         self.n_points_attn = cfg.num_points_attn
@@ -370,6 +396,7 @@ class MenghaoPointTransformerCls(nn.Module):
         self.bn1 = nn.BatchNorm1d(64)
         self.bn2 = nn.BatchNorm1d(64)
         
+        self.radii = list(map(float, cfg.radii))
 
         # NOTE CHANGE GATHER LOCAL LAYERS CORRESPONDING TO METHOD WE'RE USING ABOVE
         # USING SUMMARY METRICS (COSINE SIM/SUM/AVERAGING OVER THE FEATURES WE SHOULD
@@ -382,10 +409,10 @@ class MenghaoPointTransformerCls(nn.Module):
         else:
             # IF WE WANT DISTANCES IN EACH CARDINAL DIRECTION OF DATA USE THIS
             if self.downsample_layer_count == 2:
-                self.gather_local_0 = Local_op(in_channels=128, out_channels=128)
-                self.gather_local_1 = Local_op(in_channels=256, out_channels=256)
+                self.gather_local_0 = Local_op(in_channels=64+64*len(self.radii), out_channels=128)
+                self.gather_local_1 = Local_op(in_channels=128+128*len(self.radii), out_channels=256)
             elif self.downsample_layer_count == 1:
-                self.gather_local_1 = Local_op(in_channels=128, out_channels=256)
+                self.gather_local_1 = Local_op(in_channels=128+128*len(self.radii), out_channels=256)
         self.pt_last = StackedAttention(channels=256, cfg=cfg)
 
         self.relu = nn.ReLU()
@@ -433,17 +460,17 @@ class MenghaoPointTransformerCls(nn.Module):
             import math
             # This is not used if the voxel method is not used
             voxel_width_1 = int(math.floor((2*self.n_points_attn) ** (1/3)))
-            new_xyz, new_feature = sample_and_group(npoint=self.n_points_attn * 2, nsample=32, xyz=xyz, points=x, sampling_method=self.sampling_method, distance_function=self.distance_function, local_features=self.local_features, voxel_width=voxel_width_1)
+            new_xyz, new_feature = sample_and_group(npoint=self.n_points_attn * 2, nsample=32, xyz=xyz, points=x, sampling_method=self.sampling_method, distance_function=self.distance_function, local_features=self.local_features, voxel_width=voxel_width_1, radii=self.radii)
             feature_0 = self.gather_local_0(new_feature)
             feature = feature_0.permute(0, 2, 1)
             
             voxel_width_2 = int(math.floor((self.n_points_attn) ** (1/3)))
-            new_xyz, new_feature = sample_and_group(npoint=self.n_points_attn, nsample=32, xyz=new_xyz, points=feature, sampling_method=self.sampling_method, distance_function=self.distance_function, local_features=self.local_features, voxel_width=voxel_width_2)
+            new_xyz, new_feature = sample_and_group(npoint=self.n_points_attn, nsample=32, xyz=new_xyz, points=feature, sampling_method=self.sampling_method, distance_function=self.distance_function, local_features=self.local_features, voxel_width=voxel_width_2, radii=self.radii)
             feature_1 = self.gather_local_1(new_feature)
         elif self.downsample_layer_count == 1:
             import math
             voxel_width = int(math.floor(self.n_points_attn ** (1/3)))
-            new_xyz, new_feature = sample_and_group(npoint=self.n_points_attn, nsample=32, xyz=xyz, points=x, sampling_method=self.sampling_method, distance_function=self.distance_function, local_features=self.local_features, voxel_width=voxel_width)
+            new_xyz, new_feature = sample_and_group(npoint=self.n_points_attn, nsample=32, xyz=xyz, points=x, sampling_method=self.sampling_method, distance_function=self.distance_function, local_features=self.local_features, voxel_width=voxel_width, radii=self.radii)
             feature_1 = self.gather_local_1(new_feature)
         else:
             raise KeyError()

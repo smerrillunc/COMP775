@@ -35,6 +35,8 @@ parser.add_argument('-num-class', '--num-class', type=int, default=32)
 parser.add_argument('-epoch', '--epoch', type=int, default=80)
 parser.add_argument('-optimizer', '--optimizer', type=str, default='Adam')
 parser.add_argument('-normal', '--normal', type=bool, default=True)
+#parser.add_argument('-radii', '--radii', type=int, default=1)
+parser.add_argument('-radii', '--radii', nargs='+', default=[.1])
 
 parser.add_argument('--num-points-attn', type=int, default=256)
 parser.add_argument('-use-isab', '--use-isab', type=int, default=0)
