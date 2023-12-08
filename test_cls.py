@@ -32,6 +32,8 @@ parser.add_argument('-num-class', '--num-class', type=int, default=32)
 parser.add_argument('-epoch', '--epoch', type=int, default=80)
 parser.add_argument('-optimizer', '--optimizer', type=str, default='Adam')
 parser.add_argument('-normal', '--normal', type=bool, default=True)
+#parser.add_argument('-radii', '--radii', type=int, default=1)
+parser.add_argument('-radii', '--radii', nargs='+', default=[.1])
 
 parser.add_argument('--num-points-attn', type=int, default=256)
 parser.add_argument('-use-isab', '--use-isab', type=int, default=0)
@@ -59,7 +61,7 @@ def test(model, loader, num_class=40):
         target = target[:, 0]
         points, target = points.to(device), target.to(device)
         classifier = model.eval()
-        pred = classifier(points)
+        pred, _ = classifier(points)
         pred_choice = pred.data.max(1)[1]
         for cat in np.unique(target.cpu()):
             classacc = pred_choice[target==cat].eq(target[target==cat].long().data).cpu().sum()

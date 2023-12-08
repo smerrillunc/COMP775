@@ -127,13 +127,23 @@ def sample_and_group(npoint: torch.Tensor, nsample: int, xyz: torch.Tensor, poin
     if distance_function =='bq':
         print("Ball Query Start")
         # relative scale to use for radii
-        dists = square_distance(new_xyz, xyz)
-        scale = float(torch.max(dists) - torch.min(dists))
+        # dists = square_distance(new_xyz, xyz)
+        # scale = float(torch.max(dists) - torch.min(dists))
+                
+        # min_tens = torch.min(xyz, axis=1)[0] # shape = B x 3
+        # max_tens = torch.max(xyz, axis=1)[0]   # number of points in 3d cube
+        #print(max_tens.shape)
+        # max_x, max_y, max_z = max_tens[:,0], max_tens[:,1], max_tens[:,2]  # number of points in 3d cube
+        # min_x, min_y, min_z = min_tens[:,0], min_tens[:,1], min_tens[:,2]  # number of points in 3d cube
+        
+        # scale = torch.maximum(torch.maximum(max_x - min_x, max_y - min_y), max_z - min_z)
         # check different radii
         # radii = [0.1]
         # initialize empty tensor
+        scale = 1
         grouped_points = index_points(points, query_ball_point(radii[0]*scale, nsample, xyz, new_xyz))
         local_feat = grouped_points - new_points.view(B, S, 1, -1)
+
 
         for i in range(1, len(radii)):
             grouped_points = index_points(points, query_ball_point(radii[i]*scale, nsample, xyz, new_xyz))
@@ -412,7 +422,7 @@ class MenghaoPointTransformerCls(nn.Module):
                 self.gather_local_0 = Local_op(in_channels=64+64*len(self.radii), out_channels=128)
                 self.gather_local_1 = Local_op(in_channels=128+128*len(self.radii), out_channels=256)
             elif self.downsample_layer_count == 1:
-                self.gather_local_1 = Local_op(in_channels=128+128*len(self.radii), out_channels=256)
+                self.gather_local_1 = Local_op(in_channels=64+64*len(self.radii), out_channels=256)
         self.pt_last = StackedAttention(channels=256, cfg=cfg)
 
         self.relu = nn.ReLU()

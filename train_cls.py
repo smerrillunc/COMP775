@@ -134,14 +134,6 @@ def main(args: ParserArgs):
 
     criterion = torch.nn.CrossEntropyLoss()
 
-    try:
-        checkpoint = torch.load(f'log/cls/{exp_name}/best_model.pth')
-        start_epoch = checkpoint['epoch']
-        classifier.load_state_dict(checkpoint['model_state_dict'])
-        print('Use pretrain model')
-    except:
-        print('No existing model, starting training from scratch...')
-        start_epoch = 0
 
     if args.optimizer == 'Adam':
         optimizer = torch.optim.Adam(
@@ -154,7 +146,21 @@ def main(args: ParserArgs):
     else:
         optimizer = torch.optim.SGD(classifier.parameters(), lr=0.01, momentum=0.9)
 
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.3)
+    try:
+        checkpoint = torch.load(f'log/cls/{exp_name}/best_model.pth')
+        start_epoch = checkpoint['epoch']
+        classifier.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        print('Use pretrain model')
+    except:
+        print('No existing model, starting training from scratch...')
+        start_epoch = 0
+
+    if start_epoch > 0:
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.3, last_epoch=start_epoch)
+    else:
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.3, last_epoch=-1)
+
     global_epoch = 0
     global_step = 0
     best_instance_acc = 0.0
@@ -169,7 +175,7 @@ def main(args: ParserArgs):
         
         import time
         
-        start = time.time()
+        total_time = 0
         
         classifier.train()
         for batch_id, data in enumerate(trainDataLoader, 0):
@@ -181,9 +187,11 @@ def main(args: ParserArgs):
             points = torch.Tensor(points)
             target = target[:, 0]
 
+
             points, target = points.to(device), target.to(device)
             optimizer.zero_grad()
 
+            start = time.time()
             pred = classifier(points)
             loss = criterion(pred, target.long())
             pred_choice = pred.data.max(1)[1]
@@ -191,18 +199,22 @@ def main(args: ParserArgs):
             mean_correct.append(correct.item() / float(points.size()[0]))
             loss.backward()
             optimizer.step()
+            end = time.time()
+            
+            total_time += end - start
+
             global_step += 1
             
         scheduler.step()
         
-        end = time.time()
 
         train_instance_acc = np.mean(mean_correct)
         print('Train Instance Accuracy: %f' % train_instance_acc)
         
         # record run time.
         with open(f"log/cls/{exp_name}/times.txt", "a") as f:
-            f.write(f"{epoch},{end - start}\n")
+            # avg train time per batch
+            f.write(f"{epoch},{total_time / len(trainDataLoader)}\n")
         
         writer.add_scalar("train_acc", train_instance_acc, epoch)
 
